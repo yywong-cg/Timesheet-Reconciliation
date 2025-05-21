@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 HSBC_FILE = "/Users/eunicewong/Desktop/Input/IN_CombinedCSV.xlsx"  # File 1
 MAPPING_FILE = "/Users/eunicewong/Desktop/Input/GRI-2-May-2025.xlsb"  # File 2
 CG_FILE = "/Users/eunicewong/Desktop/Input/Project Time Actuals Report - DAILY 2025-05-02.xlsx"  # File 3
-OUTPUT_DIR = "output"  # Changed to local output directory
+OUTPUT_DIR = "/Users/eunicewong/Desktop/Input/Report" 
 
 class TimesheetReconciliation:
     def __init__(self, hsbc_file, mapping_file, cg_file, output_dir='output'):
