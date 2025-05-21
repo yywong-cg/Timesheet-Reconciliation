@@ -14,10 +14,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Define file paths
-HSBC_FILE = "/Users/eunicewong/Desktop/Input/IN_CombinedCSV.xlsx"  # File 1
-MAPPING_FILE = "/Users/eunicewong/Desktop/Input/GRI-2-May-2025.xlsb"  # File 2
-CG_FILE = "/Users/eunicewong/Desktop/Input/Project Time Actuals Report - DAILY 2025-05-02.xlsx"  # File 3
-OUTPUT_DIR = "/Users/eunicewong/Desktop/Input/Report" 
+HSBC_FILE = "/Users/yuenyingwong/Desktop/Input/IN_CombinedCSV.xlsx"  # File 1
+MAPPING_FILE = "/Users/yuenyingwong/Desktop/Input/GRI-2-May-2025.xlsb"  # File 2
+CG_FILE = "/Users/yuenyingwong/Desktop/Input/Project Time Actuals Report - DAILY 2025-05-02.xlsx"  # File 3
+OUTPUT_DIR = "/Users/yuenyingwong/Desktop/Input/Report" 
 
 class TimesheetReconciliation:
     def __init__(self, hsbc_file, mapping_file, cg_file, output_dir='output'):
@@ -42,7 +42,7 @@ class TimesheetReconciliation:
         """Process timesheet data"""
         try:
             # Log initial row count
-            logger.info(f"Initial HSBC data rows: {len(hsbc_df)}")
+            # logger.info(f"Initial HSBC data rows: {len(hsbc_df)}")
             
             # Step 1: Filter HSBC data
             hsbc_filtered = hsbc_df[
@@ -52,7 +52,7 @@ class TimesheetReconciliation:
             ].copy()
             
             # Log filtered rows
-            logger.info(f"Rows after filtering: {len(hsbc_filtered)}")
+            # logger.info(f"Rows after filtering: {len(hsbc_filtered)}")
 
             # Step 2: Combine mapping data from both sheets
             mapping_combined = pd.concat([
@@ -62,7 +62,7 @@ class TimesheetReconciliation:
             
             # Remove duplicates from mapping data
             mapping_combined = mapping_combined.drop_duplicates(subset=['PS ID'])
-            logger.info(f"Unique PS IDs in mapping data: {len(mapping_combined)}")
+            # logger.info(f"Unique PS IDs in mapping data: {len(mapping_combined)}")
 
             # Step 3: Merge HSBC data with mapping data
             merged_data = pd.merge(
@@ -78,11 +78,28 @@ class TimesheetReconciliation:
                 logger.warning(f"Merge created duplicates! Before: {len(hsbc_filtered)}, After: {len(merged_data)}")
                 # Remove duplicates if any
                 merged_data = merged_data.drop_duplicates()
-                logger.info(f"Rows after removing duplicates: {len(merged_data)}")
+                # logger.info(f"Rows after removing duplicates: {len(merged_data)}")
 
             # Step 4: Process CG data
             # Convert Entry Date to datetime if it's not already
             cg_df['Entry Date'] = pd.to_datetime(cg_df['Entry Date'])
+            cg_df['User Email'] = cg_df['User Email'].str.lower().str.strip()  # Convert emails to lowercase and strip whitespace
+            
+            # Parse Timesheet Period into start and end dates
+            def parse_timesheet_period(period):
+                try:
+                    start_str, end_str = period.split(' - ')
+                    start_date = pd.to_datetime(start_str)
+                    end_date = pd.to_datetime(end_str)
+                    return start_date, end_date
+                except:
+                    return None, None
+            
+            cg_df['Timesheet Start'], cg_df['Timesheet End'] = zip(*cg_df['Timesheet Period'].apply(parse_timesheet_period))
+            
+            # logger.info(f"Total CG entries: {len(cg_df)}")
+            # logger.info(f"Unique CG emails: {cg_df['User Email'].nunique()}")
+            # logger.info(f"Date range in CG data: {cg_df['Entry Date'].min()} to {cg_df['Entry Date'].max()}")
             
             # Create a list to store results
             results = []
@@ -91,17 +108,45 @@ class TimesheetReconciliation:
             for _, row in merged_data.iterrows():
                 # Calculate date range for CG hours
                 timeperiod = pd.to_datetime(row['TIMEPERIOD'])
-                end_date = timeperiod + timedelta(days=7)
+                # Calculate end date (TIMEPERIOD + 6 days) and set it to end of day
+                end_date = (timeperiod + timedelta(days=6)).replace(hour=23, minute=59, second=59)
+                
+                # Get CG Email Id for matching
+                cg_email = row['CG Email Id'].lower().strip() if pd.notna(row['CG Email Id']) else None
+                
+                # Remove detailed logger.info for each row
+                # logger.info(f"\nProcessing {row['RESOURCE_NAME']}")
+                # logger.info(f"CG Email: {cg_email}")
+                # logger.info(f"Date range calculation:")
+                # logger.info(f"  TIMEPERIOD (Start Date): {timeperiod.date()}")
+                # logger.info(f"  End Date (TIMEPERIOD + 6 days): {end_date.date()} (inclusive, until 23:59:59)")
+                # logger.info(f"  Total days in range: 7 days (including both start and end dates)")
                 
                 # Filter CG data for the date range and email
                 cg_filtered = cg_df[
-                    (cg_df['User Email'] == row['CG Email Id']) &
-                    (cg_df['Entry Date'] >= timeperiod) &
-                    (cg_df['Entry Date'] <= end_date)
+                    (cg_df['User Email'] == cg_email) &
+                    (
+                        # Match entries where the timesheet period overlaps with our target period
+                        ((cg_df['Timesheet Start'] <= end_date) & (cg_df['Timesheet End'] >= timeperiod)) |
+                        # Or match entries where the entry date falls within our target period
+                        ((cg_df['Entry Date'] >= timeperiod) & (cg_df['Entry Date'] <= end_date))
+                    )
                 ]
+                
+                # Remove matching info logs
+                # logger.info(f"Found {len(cg_filtered)} matching CG entries")
+                # if len(cg_filtered) > 0:
+                #     logger.info("CG entries found:")
+                #     for _, cg_row in cg_filtered.iterrows():
+                #         logger.info(f"  Date: {cg_row['Entry Date'].date()}, Hours: {cg_row['Actual Billable Hours (Selected Dates)']}")
                 
                 # Calculate CG hours
                 cg_hours = cg_filtered['Actual Billable Hours (Selected Dates)'].sum()
+                
+                # Remove per-row hours log
+                # logger.info(f"HSBC hours: {row['UNITS_CONSUMED']}, CG hours: {cg_hours}")
+                if abs(row['UNITS_CONSUMED'] - cg_hours) > 0.01:  # Using small threshold for float comparison
+                    logger.warning(f"DISCREPANCY FOUND: {row['UNITS_CONSUMED'] - cg_hours} hours difference")
 
                 # Create result row
                 result_row = {
