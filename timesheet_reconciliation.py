@@ -14,10 +14,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Define file paths
-HSBC_FILE = "/Users/yuenyingwong/Desktop/Timesheet-Reconciliation/input/combinedCSV.xlsx"  # File 1
-MAPPING_FILE = "/Users/yuenyingwong/Desktop/Timesheet-Reconciliation/input/grl.xlsb"  # File 2
-CG_FILE = "/Users/yuenyingwong/Desktop/Timesheet-Reconciliation/input/projectTimeActualsReport.xlsx"  # File 3
-OUTPUT_DIR = "output"
+HSBC_FILE = "/Users/eunicewong/Desktop/Input/IN_CombinedCSV.xlsx"  # File 1
+MAPPING_FILE = "/Users/eunicewong/Desktop/Input/GRI-2-May-2025.xlsb"  # File 2
+CG_FILE = "/Users/eunicewong/Desktop/Input/Project Time Actuals Report - DAILY 2025-05-02.xlsx"  # File 3
+OUTPUT_DIR = "output"  # Changed to local output directory
 
 class TimesheetReconciliation:
     def __init__(self, hsbc_file, mapping_file, cg_file, output_dir='output'):
@@ -41,17 +41,27 @@ class TimesheetReconciliation:
     def process_timesheet(self, hsbc_df, mapping_df, cg_df):
         """Process timesheet data"""
         try:
+            # Log initial row count
+            logger.info(f"Initial HSBC data rows: {len(hsbc_df)}")
+            
             # Step 1: Filter HSBC data
             hsbc_filtered = hsbc_df[
                 (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
                 (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted']))
             ].copy()
+            
+            # Log filtered rows
+            logger.info(f"Rows after filtering: {len(hsbc_filtered)}")
 
             # Step 2: Combine mapping data from both sheets
             mapping_combined = pd.concat([
                 mapping_df['Offshore Active'],
                 mapping_df['Offshore Inactive']
             ], ignore_index=True)
+            
+            # Remove duplicates from mapping data
+            mapping_combined = mapping_combined.drop_duplicates(subset=['PS ID'])
+            logger.info(f"Unique PS IDs in mapping data: {len(mapping_combined)}")
 
             # Step 3: Merge HSBC data with mapping data
             merged_data = pd.merge(
@@ -61,6 +71,13 @@ class TimesheetReconciliation:
                 right_on='PS ID',
                 how='left'
             )
+            
+            # Check for duplicates after merge
+            if len(merged_data) != len(hsbc_filtered):
+                logger.warning(f"Merge created duplicates! Before: {len(hsbc_filtered)}, After: {len(merged_data)}")
+                # Remove duplicates if any
+                merged_data = merged_data.drop_duplicates()
+                logger.info(f"Rows after removing duplicates: {len(merged_data)}")
 
             # Step 4: Process CG data
             # Convert Entry Date to datetime if it's not already
@@ -95,7 +112,9 @@ class TimesheetReconciliation:
                 }
                 results.append(result_row)
 
-            return pd.DataFrame(results)
+            final_df = pd.DataFrame(results)
+            logger.info(f"Final result rows: {len(final_df)}")
+            return final_df
 
         except Exception as e:
             logger.error(f"Error processing timesheet data: {str(e)}")
