@@ -47,7 +47,8 @@ class TimesheetReconciliation:
             # Step 1: Filter HSBC data
             hsbc_filtered = hsbc_df[
                 (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
-                (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted']))
+                (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted'])) &
+                (hsbc_df['UNITS_CONSUMED'] > 0)  # Remove rows with zero hours
             ].copy()
             
             # Log filtered rows
@@ -90,14 +91,17 @@ class TimesheetReconciliation:
             for _, row in merged_data.iterrows():
                 # Calculate date range for CG hours
                 timeperiod = pd.to_datetime(row['TIMEPERIOD'])
-                end_date = timeperiod + timedelta(days=5)
+                end_date = timeperiod + timedelta(days=7)
                 
-                # Filter CG data for the date range
-                cg_hours = cg_df[
+                # Filter CG data for the date range and email
+                cg_filtered = cg_df[
                     (cg_df['User Email'] == row['CG Email Id']) &
                     (cg_df['Entry Date'] >= timeperiod) &
                     (cg_df['Entry Date'] <= end_date)
-                ]['Actual Billable Hours (Selected Dates)'].sum()
+                ]
+                
+                # Calculate CG hours
+                cg_hours = cg_filtered['Actual Billable Hours (Selected Dates)'].sum()
 
                 # Create result row
                 result_row = {
