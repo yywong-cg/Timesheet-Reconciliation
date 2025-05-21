@@ -13,10 +13,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Define file paths
+HSBC_FILE = "/Users/yuenyingwong/Desktop/Timesheet-Reconciliation/input/combinedCSV.xlsx"  # File 1
+MAPPING_FILE = "/Users/yuenyingwong/Desktop/Timesheet-Reconciliation/input/grl.xlsb"  # File 2
+CG_FILE = "/Users/yuenyingwong/Desktop/Timesheet-Reconciliation/input/projectTimeActualsReport.xlsx"  # File 3
+OUTPUT_DIR = "output"
+
 class TimesheetReconciliation:
-    def __init__(self):
-        self.input_dir = 'input'
-        self.output_dir = 'output'
+    def __init__(self, hsbc_file, mapping_file, cg_file, output_dir='output'):
+        self.hsbc_file = hsbc_file
+        self.mapping_file = mapping_file
+        self.cg_file = cg_file
+        self.output_dir = output_dir
         
     def read_excel_file(self, file_path):
         """Read Excel file and return DataFrame"""
@@ -131,29 +139,11 @@ class TimesheetReconciliation:
             # Ensure output directory exists
             os.makedirs(self.output_dir, exist_ok=True)
             
-            # Read input files
-            hsbc_file = None
-            mapping_file = None
-            cg_file = None
-            
-            for filename in os.listdir(self.input_dir):
-                file_path = os.path.join(self.input_dir, filename)
-                if filename.endswith('.xlsx'):
-                    if 'Project Time Actuals Report' in pd.read_excel(file_path).columns:
-                        cg_file = file_path
-                    else:
-                        hsbc_file = file_path
-                elif filename.endswith('.xlsb'):
-                    mapping_file = file_path
-
-            if not all([hsbc_file, mapping_file, cg_file]):
-                raise ValueError("Missing required input files")
-
             # Read all files
             logger.info("Reading input files...")
-            hsbc_df = self.read_excel_file(hsbc_file)
-            mapping_df = self.read_excel_file(mapping_file)
-            cg_df = self.read_excel_file(cg_file)
+            hsbc_df = self.read_excel_file(self.hsbc_file)
+            mapping_df = self.read_excel_file(self.mapping_file)
+            cg_df = self.read_excel_file(self.cg_file)
 
             # Process data
             logger.info("Processing timesheet data...")
@@ -170,5 +160,10 @@ class TimesheetReconciliation:
             raise
 
 if __name__ == "__main__":
-    reconciliation = TimesheetReconciliation()
+    reconciliation = TimesheetReconciliation(
+        hsbc_file=HSBC_FILE,
+        mapping_file=MAPPING_FILE,
+        cg_file=CG_FILE,
+        output_dir=OUTPUT_DIR
+    )
     reconciliation.run() 
