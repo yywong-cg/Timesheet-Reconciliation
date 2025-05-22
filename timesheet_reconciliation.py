@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import logging
 import numpy as np
+from io import BytesIO
 
 # Set up logging
 logging.basicConfig(
@@ -97,10 +98,6 @@ class TimesheetReconciliation:
             
             cg_df['Timesheet Start'], cg_df['Timesheet End'] = zip(*cg_df['Timesheet Period'].apply(parse_timesheet_period))
             
-            # logger.info(f"Total CG entries: {len(cg_df)}")
-            # logger.info(f"Unique CG emails: {cg_df['User Email'].nunique()}")
-            # logger.info(f"Date range in CG data: {cg_df['Entry Date'].min()} to {cg_df['Entry Date'].max()}")
-            
             # Create a list to store results
             results = []
 
@@ -114,14 +111,6 @@ class TimesheetReconciliation:
                 # Get CG Email Id for matching
                 cg_email = row['CG Email Id'].lower().strip() if pd.notna(row['CG Email Id']) else None
                 
-                # Remove detailed logger.info for each row
-                # logger.info(f"\nProcessing {row['RESOURCE_NAME']}")
-                # logger.info(f"CG Email: {cg_email}")
-                # logger.info(f"Date range calculation:")
-                # logger.info(f"  TIMEPERIOD (Start Date): {timeperiod.date()}")
-                # logger.info(f"  End Date (TIMEPERIOD + 6 days): {end_date.date()} (inclusive, until 23:59:59)")
-                # logger.info(f"  Total days in range: 7 days (including both start and end dates)")
-                
                 # Filter CG data for the date range and email
                 cg_filtered = cg_df[
                     (cg_df['User Email'] == cg_email) &
@@ -133,21 +122,9 @@ class TimesheetReconciliation:
                     )
                 ]
                 
-                # Remove matching info logs
-                # logger.info(f"Found {len(cg_filtered)} matching CG entries")
-                # if len(cg_filtered) > 0:
-                #     logger.info("CG entries found:")
-                #     for _, cg_row in cg_filtered.iterrows():
-                #         logger.info(f"  Date: {cg_row['Entry Date'].date()}, Hours: {cg_row['Actual Billable Hours (Selected Dates)']}")
-                
                 # Calculate CG hours
                 cg_hours = cg_filtered['Actual Billable Hours (Selected Dates)'].sum()
                 
-                # Remove per-row hours log
-                # logger.info(f"HSBC hours: {row['UNITS_CONSUMED']}, CG hours: {cg_hours}")
-                if abs(row['UNITS_CONSUMED'] - cg_hours) > 0.01:  # Using small threshold for float comparison
-                    logger.warning(f"DISCREPANCY FOUND: {row['UNITS_CONSUMED'] - cg_hours} hours difference")
-
                 # Create result row
                 result_row = {
                     'Name': row['RESOURCE_NAME'],
@@ -169,23 +146,67 @@ class TimesheetReconciliation:
             logger.error(f"Error processing timesheet data: {str(e)}")
             raise
 
+    def process_flagged_timesheets(self, hsbc_df, mapping_df):
+        """Process flagged timesheet entries"""
+        try:
+            # Step 1: Filter HSBC data for flagged entries
+            flagged_entries = hsbc_df[
+                (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
+                (hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted'])) &
+                (hsbc_df['UNITS_CONSUMED'] > 0)  # Remove rows with zero hours
+            ].copy()
+
+            # Step 2: Combine mapping data from both sheets
+            mapping_combined = pd.concat([
+                mapping_df['Offshore Active'],
+                mapping_df['Offshore Inactive']
+            ], ignore_index=True)
+            
+            # Remove duplicates from mapping data
+            mapping_combined = mapping_combined.drop_duplicates(subset=['PS ID'])
+
+            # Step 3: Merge HSBC data with mapping data
+            merged_data = pd.merge(
+                flagged_entries,
+                mapping_combined[['PS ID', 'CG Email Id', 'P&L Owner new']],
+                left_on='RESOURCEID',
+                right_on='PS ID',
+                how='left'
+            )
+
+            # Create result DataFrame with required columns
+            result_df = pd.DataFrame({
+                'Name': merged_data['RESOURCE_NAME'],
+                'HSBC Staff ID': merged_data['RESOURCEID'],
+                'CG Email': merged_data['CG Email Id'],
+                'P&L Owner': merged_data['P&L Owner new'],
+                'Timesheet Period': merged_data['TIMEPERIOD'],
+                'HSBC Hrs': merged_data['UNITS_CONSUMED'],
+                'Status': merged_data['TSSTATUS']
+            })
+
+            return result_df
+
+        except Exception as e:
+            logger.error(f"Error processing flagged timesheet entries: {str(e)}")
+            raise
+
     def generate_report(self, processed_data):
         """Generate reconciliation report"""
         try:
-            # Create output filename with timestamp
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_file = os.path.join(self.output_dir, f'Timesheet_Reconciliation_{timestamp}.xlsx')
+            # Create a BytesIO object to store the Excel data
+            output = BytesIO()
             
             # Create Excel writer
-            with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-                # Write to worksheet
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Write main reconciliation worksheet
                 processed_data.to_excel(
                     writer,
                     sheet_name='HSBC_CG TS Recon',
                     index=False
                 )
                 
-                # Auto-adjust column widths
+                # Auto-adjust column widths for main worksheet
                 worksheet = writer.sheets['HSBC_CG TS Recon']
                 for idx, col in enumerate(processed_data.columns):
                     max_length = max(
@@ -194,8 +215,34 @@ class TimesheetReconciliation:
                     )
                     worksheet.column_dimensions[chr(65 + idx)].width = max_length + 2
 
-            logger.info(f"Report generated successfully: {output_file}")
-            return output_file
+                # Process and write flagged timesheet entries
+                flagged_data = self.process_flagged_timesheets(
+                    self.read_excel_file(self.hsbc_file),
+                    self.read_excel_file(self.mapping_file)
+                )
+                
+                # Write flagged entries worksheet
+                flagged_data.to_excel(
+                    writer,
+                    sheet_name='HSBC Flagged TS Entry',
+                    index=False
+                )
+                
+                # Auto-adjust column widths for flagged entries worksheet
+                worksheet = writer.sheets['HSBC Flagged TS Entry']
+                for idx, col in enumerate(flagged_data.columns):
+                    max_length = max(
+                        flagged_data[col].astype(str).apply(len).max(),
+                        len(col)
+                    )
+                    worksheet.column_dimensions[chr(65 + idx)].width = max_length + 2
+
+            # Get the Excel data
+            excel_data = output.getvalue()
+            output.close()
+
+            logger.info("Report generated successfully")
+            return excel_data
 
         except Exception as e:
             logger.error(f"Error generating report: {str(e)}")
@@ -204,9 +251,6 @@ class TimesheetReconciliation:
     def run(self):
         """Main execution method"""
         try:
-            # Ensure output directory exists
-            os.makedirs(self.output_dir, exist_ok=True)
-            
             # Read all files
             logger.info("Reading input files...")
             hsbc_df = self.read_excel_file(self.hsbc_file)
@@ -219,9 +263,10 @@ class TimesheetReconciliation:
 
             # Generate report
             logger.info("Generating report...")
-            output_file = self.generate_report(processed_data)
+            excel_data = self.generate_report(processed_data)
             
-            logger.info(f"Reconciliation completed successfully. Report saved to: {output_file}")
+            logger.info("Reconciliation completed successfully")
+            return excel_data
                     
         except Exception as e:
             logger.error(f"Error in main execution: {str(e)}")
