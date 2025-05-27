@@ -14,6 +14,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Define input file paths
+HSBC_FILE = 'Project Time Actuals Report - DAILY 2025-05-02.xlsx'
+MAPPING_FILE = 'GRI-2-May-2025.xlsb'
+CG_FILE = 'IN_combinedCSV.xlsx'
+OUTPUT_DIR = 'output'
+
 class TimesheetReconciliation:
     def __init__(self, hsbc_file, mapping_file, cg_file, output_dir='output'):
         self.hsbc_file = hsbc_file
@@ -36,13 +42,20 @@ class TimesheetReconciliation:
     def process_timesheet(self, hsbc_df, mapping_df, cg_df):
         """Process timesheet data"""
         try:
-            # Step 1: Filter HSBC data
+            # Step 1: Filter HSBC data by PROJECT_PRODUCTIVE_FLAG and TSSTATUS
             hsbc_filtered = hsbc_df[
                 (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
                 (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted']))
             ].copy()
             
-            # Step 2: Combine mapping data from both sheets
+            # Ensure UNITS_CONSUMED is numeric and fill NaN with 0
+            hsbc_filtered['UNITS_CONSUMED'] = pd.to_numeric(hsbc_filtered['UNITS_CONSUMED'], errors='coerce').fillna(0)
+            
+            # Step 2: Sum UNITS_CONSUMED for same RESOURCEID and TIMEPERIOD
+            hsbc_grouped = hsbc_filtered.groupby(['RESOURCEID', 'RESOURCE_NAME', 'TIMEPERIOD'])['UNITS_CONSUMED'].sum().reset_index()
+            
+            # Step 3: Map CG Email from mapping file
+            # Combine mapping data from both sheets
             mapping_combined = pd.concat([
                 mapping_df['Offshore Active'],
                 mapping_df['Offshore Inactive']
@@ -50,35 +63,26 @@ class TimesheetReconciliation:
             
             # Remove duplicates from mapping data
             mapping_combined = mapping_combined.drop_duplicates(subset=['PS ID'])
-
-            # Step 3: Merge HSBC data with mapping data
+            
+            # Merge HSBC data with mapping data
             merged_data = pd.merge(
-                hsbc_filtered,
+                hsbc_grouped,
                 mapping_combined[['PS ID', 'CG Email Id', 'P&L Owner new']],
                 left_on='RESOURCEID',
                 right_on='PS ID',
                 how='left'
             )
             
-            # Check for duplicates after merge
-            if len(merged_data) != len(hsbc_filtered):
-                logger.warning(f"Merge created duplicates! Before: {len(hsbc_filtered)}, After: {len(merged_data)}")
-                # Remove duplicates if any
-                merged_data = merged_data.drop_duplicates()
-
-            # Step 4: Process CG data
+            # Step 4: Map CG hours for each record
             # Convert Entry Date to datetime if it's not already
             cg_df['Entry Date'] = pd.to_datetime(cg_df['Entry Date'])
-            cg_df['User Email'] = cg_df['User Email'].str.lower().str.strip()  # Convert emails to lowercase and strip whitespace
+            cg_df['User Email'] = cg_df['User Email'].str.lower().str.strip()
             
-            # Create a list to store results
             results = []
-
-            # Process each row in merged data
             for _, row in merged_data.iterrows():
                 # Calculate date range for CG hours
                 timeperiod = pd.to_datetime(row['TIMEPERIOD'])
-                # Calculate end date (TIMEPERIOD + 6 days) and set it to end of day
+                # Calculate end date (timeperiod + 6 days) to get 7-day window
                 end_date = (timeperiod + timedelta(days=6)).replace(hour=23, minute=59, second=59)
                 
                 # Get CG Email Id for matching
@@ -90,8 +94,8 @@ class TimesheetReconciliation:
                     ((cg_df['Entry Date'] >= timeperiod) & (cg_df['Entry Date'] <= end_date))
                 ]
                 
-                # Calculate CG hours
-                cg_hours = cg_filtered['Actual Billable Hours (Selected Dates)'].sum()
+                # Calculate CG hours (use 0 if no matching records found)
+                cg_hours = cg_filtered['Actual Billable Hours (Selected Dates)'].sum() if not cg_filtered.empty else 0
                 
                 # Create result row
                 result_row = {
@@ -120,8 +124,7 @@ class TimesheetReconciliation:
             # Step 1: Filter HSBC data for flagged entries
             flagged_entries = hsbc_df[
                 (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
-                (hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted'])) &
-                (hsbc_df['UNITS_CONSUMED'] > 0)  # Remove rows with zero hours
+                (hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted'])) # Remove rows with zero hours
             ].copy()
 
             # Step 2: Combine mapping data from both sheets
@@ -241,6 +244,9 @@ class TimesheetReconciliation:
             raise
 
 if __name__ == "__main__":
+    # Create output directory if it doesn't exist
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
     reconciliation = TimesheetReconciliation(
         hsbc_file=HSBC_FILE,
         mapping_file=MAPPING_FILE,
