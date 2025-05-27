@@ -14,12 +14,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Define file paths
-HSBC_FILE = "/Users/yuenyingwong/Desktop/Input/IN_CombinedCSV.xlsx"  # File 1
-MAPPING_FILE = "/Users/yuenyingwong/Desktop/Input/GRI-2-May-2025.xlsb"  # File 2
-CG_FILE = "/Users/yuenyingwong/Desktop/Input/Project Time Actuals Report - DAILY 2025-05-02.xlsx"  # File 3
-OUTPUT_DIR = "/Users/yuenyingwong/Desktop/Input/Report" 
-
 class TimesheetReconciliation:
     def __init__(self, hsbc_file, mapping_file, cg_file, output_dir='output'):
         self.hsbc_file = hsbc_file
@@ -42,19 +36,12 @@ class TimesheetReconciliation:
     def process_timesheet(self, hsbc_df, mapping_df, cg_df):
         """Process timesheet data"""
         try:
-            # Log initial row count
-            # logger.info(f"Initial HSBC data rows: {len(hsbc_df)}")
-            
             # Step 1: Filter HSBC data
             hsbc_filtered = hsbc_df[
                 (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
-                (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted'])) &
-                (hsbc_df['UNITS_CONSUMED'] > 0)  # Remove rows with zero hours
+                (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted']))
             ].copy()
             
-            # Log filtered rows
-            # logger.info(f"Rows after filtering: {len(hsbc_filtered)}")
-
             # Step 2: Combine mapping data from both sheets
             mapping_combined = pd.concat([
                 mapping_df['Offshore Active'],
@@ -63,7 +50,6 @@ class TimesheetReconciliation:
             
             # Remove duplicates from mapping data
             mapping_combined = mapping_combined.drop_duplicates(subset=['PS ID'])
-            # logger.info(f"Unique PS IDs in mapping data: {len(mapping_combined)}")
 
             # Step 3: Merge HSBC data with mapping data
             merged_data = pd.merge(
@@ -79,24 +65,11 @@ class TimesheetReconciliation:
                 logger.warning(f"Merge created duplicates! Before: {len(hsbc_filtered)}, After: {len(merged_data)}")
                 # Remove duplicates if any
                 merged_data = merged_data.drop_duplicates()
-                # logger.info(f"Rows after removing duplicates: {len(merged_data)}")
 
             # Step 4: Process CG data
             # Convert Entry Date to datetime if it's not already
             cg_df['Entry Date'] = pd.to_datetime(cg_df['Entry Date'])
             cg_df['User Email'] = cg_df['User Email'].str.lower().str.strip()  # Convert emails to lowercase and strip whitespace
-            
-            # Parse Timesheet Period into start and end dates
-            def parse_timesheet_period(period):
-                try:
-                    start_str, end_str = period.split(' - ')
-                    start_date = pd.to_datetime(start_str)
-                    end_date = pd.to_datetime(end_str)
-                    return start_date, end_date
-                except:
-                    return None, None
-            
-            cg_df['Timesheet Start'], cg_df['Timesheet End'] = zip(*cg_df['Timesheet Period'].apply(parse_timesheet_period))
             
             # Create a list to store results
             results = []
@@ -114,12 +87,7 @@ class TimesheetReconciliation:
                 # Filter CG data for the date range and email
                 cg_filtered = cg_df[
                     (cg_df['User Email'] == cg_email) &
-                    (
-                        # Match entries where the timesheet period overlaps with our target period
-                        ((cg_df['Timesheet Start'] <= end_date) & (cg_df['Timesheet End'] >= timeperiod)) |
-                        # Or match entries where the entry date falls within our target period
-                        ((cg_df['Entry Date'] >= timeperiod) & (cg_df['Entry Date'] <= end_date))
-                    )
+                    ((cg_df['Entry Date'] >= timeperiod) & (cg_df['Entry Date'] <= end_date))
                 ]
                 
                 # Calculate CG hours
@@ -131,7 +99,7 @@ class TimesheetReconciliation:
                     'HSBC Staff ID': row['RESOURCEID'],
                     'CG Email': row['CG Email Id'],
                     'P&L Owner': row['P&L Owner new'],
-                    'Timesheet Period': row['TIMEPERIOD'],
+                    'Timesheet Period': pd.to_datetime(row['TIMEPERIOD']).strftime('%Y-%m-%d'),
                     'HSBC Hrs': row['UNITS_CONSUMED'],
                     'CG Hrs': cg_hours,
                     'Discrepancy': row['UNITS_CONSUMED'] - cg_hours
