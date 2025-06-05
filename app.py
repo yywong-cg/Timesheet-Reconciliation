@@ -20,16 +20,16 @@ st.header("Upload Files")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("HSBC File")
-    hsbc_file = st.file_uploader("Upload HSBC File (Excel)", type=['xlsx', 'xls'], key='hsbc')
+    st.subheader("HSBC Files")
+    hsbc_files = st.file_uploader("Upload HSBC Files (Excel/CSV)", type=['xlsx', 'xls', 'csv'], accept_multiple_files=True, key='hsbc')
 
 with col2:
     st.subheader("Mapping File")
     mapping_file = st.file_uploader("Upload Mapping File (XLSB)", type=['xlsb'], key='mapping')
 
 with col3:
-    st.subheader("CG File")
-    cg_file = st.file_uploader("Upload CG File (Excel)", type=['xlsx', 'xls'], key='cg')
+    st.subheader("CG Files")
+    cg_files = st.file_uploader("Upload CG Files (Excel/CSV)", type=['xlsx', 'xls', 'csv'], accept_multiple_files=True, key='cg')
 
 # Create a temporary directory to store uploaded files
 @st.cache_resource
@@ -50,6 +50,14 @@ def save_uploaded_file(uploaded_file, temp_dir):
             return None
     return None
 
+def save_uploaded_files(files, temp_dir):
+    saved_paths = []
+    for file in files:
+        path = save_uploaded_file(file, temp_dir)
+        if path:
+            saved_paths.append(path)
+    return saved_paths
+
 # Initialize session state for storing the generated report
 if 'report_data' not in st.session_state:
     st.session_state.report_data = None
@@ -58,16 +66,16 @@ if 'report_filename' not in st.session_state:
 
 # Process button
 if st.button("Generate Report", type="primary"):
-    if hsbc_file and mapping_file and cg_file:
+    if hsbc_files and mapping_file and cg_files:
         with st.spinner("Processing files..."):
             try:
                 # Save uploaded files to temporary directory
-                hsbc_path = save_uploaded_file(hsbc_file, temp_dir)
+                hsbc_paths = save_uploaded_files(hsbc_files, temp_dir)
                 mapping_path = save_uploaded_file(mapping_file, temp_dir)
-                cg_path = save_uploaded_file(cg_file, temp_dir)
+                cg_paths = save_uploaded_files(cg_files, temp_dir)
 
                 # Validate that all files were saved successfully
-                if not all([hsbc_path, mapping_path, cg_path]):
+                if not all([hsbc_paths, mapping_path, cg_paths]):
                     st.error("Failed to save one or more files. Please try uploading the files again.")
                     st.stop()
 
@@ -77,9 +85,9 @@ if st.button("Generate Report", type="primary"):
 
                 # Initialize and run reconciliation
                 reconciliation = TimesheetReconciliation(
-                    hsbc_file=hsbc_path,
+                    hsbc_files=hsbc_paths,
                     mapping_file=mapping_path,
-                    cg_file=cg_path,
+                    cg_files=cg_paths,
                     output_dir=output_dir
                 )
                 
@@ -100,7 +108,7 @@ if st.button("Generate Report", type="primary"):
                 st.error(f"Error generating report: {str(e)}")
                 st.error("Please check that all files are in the correct format and try again.")
     else:
-        st.warning("Please upload all three required files.")
+        st.warning("Please upload all required files.")
 
 # Download button (only shown if report is generated)
 if st.session_state.report_data is not None:
@@ -115,16 +123,16 @@ if st.session_state.report_data is not None:
 st.markdown("---")
 st.markdown("""
 ### Instructions
-1. Upload the HSBC File (Excel format)
+1. Upload one or more HSBC Files (Excel or CSV format)
 2. Upload the Mapping File (XLSB format)
-3. Upload the CG File (Excel format)
+3. Upload one or more CG Files (Excel or CSV format)
 4. Click 'Generate Report' to process the files
 5. Click 'Download Report' to save the report to your computer
 
 ### File Requirements
-- **HSBC File**: Excel file containing timesheet entries
+- **HSBC Files**: Excel (.xlsx, .xls) or CSV files containing timesheet entries
 - **Mapping File**: XLSB file containing resource mapping information
-- **CG File**: Excel file containing CG timesheet data
+- **CG Files**: Excel (.xlsx, .xls) or CSV files containing CG timesheet data
 
 ### Troubleshooting
 If you encounter any errors:

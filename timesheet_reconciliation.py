@@ -21,23 +21,40 @@ CG_FILE = 'IN_combinedCSV.xlsx'
 OUTPUT_DIR = 'output'
 
 class TimesheetReconciliation:
-    def __init__(self, hsbc_file, mapping_file, cg_file, output_dir='output'):
-        self.hsbc_file = hsbc_file
+    def __init__(self, hsbc_files, mapping_file, cg_files, output_dir='output'):
+        self.hsbc_files = hsbc_files if isinstance(hsbc_files, list) else [hsbc_files]
         self.mapping_file = mapping_file
-        self.cg_file = cg_file
+        self.cg_files = cg_files if isinstance(cg_files, list) else [cg_files]
         self.output_dir = output_dir
         
-    def read_excel_file(self, file_path):
-        """Read Excel file and return DataFrame"""
+    def read_file(self, file_path):
+        """Read Excel or CSV file and return DataFrame"""
         try:
-            if file_path.endswith('.xlsb'):
+            file_extension = os.path.splitext(file_path)[1].lower()
+            
+            if file_extension == '.xlsb':
                 # For xlsb files, read specific sheets
                 return pd.read_excel(file_path, sheet_name=['Offshore Active', 'Offshore Inactive'], engine='pyxlsb')
+            elif file_extension == '.csv':
+                # For CSV files
+                return pd.read_csv(file_path)
             else:
+                # For other Excel files
                 return pd.read_excel(file_path)
+                
         except Exception as e:
             logger.error(f"Error reading file {file_path}: {str(e)}")
             raise
+
+    def read_multiple_files(self, file_paths):
+        """Read and combine multiple Excel/CSV files"""
+        dfs = []
+        for file_path in file_paths:
+            df = self.read_file(file_path)
+            if isinstance(df, dict):  # If it's a mapping file with multiple sheets
+                return df
+            dfs.append(df)
+        return pd.concat(dfs, ignore_index=True)
 
     def process_timesheet(self, hsbc_df, mapping_df, cg_df):
         """Process timesheet data"""
@@ -124,7 +141,7 @@ class TimesheetReconciliation:
             # Step 1: Filter HSBC data for flagged entries
             flagged_entries = hsbc_df[
                 (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
-                (hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted'])) # Remove rows with zero hours
+                (hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted']))
             ].copy()
 
             # Step 2: Combine mapping data from both sheets
@@ -162,7 +179,7 @@ class TimesheetReconciliation:
             logger.error(f"Error processing flagged timesheet entries: {str(e)}")
             raise
 
-    def generate_report(self, processed_data):
+    def generate_report(self, processed_data, flagged_data):
         """Generate reconciliation report"""
         try:
             # Create a BytesIO object to store the Excel data
@@ -186,12 +203,6 @@ class TimesheetReconciliation:
                     )
                     worksheet.column_dimensions[chr(65 + idx)].width = max_length + 2
 
-                # Process and write flagged timesheet entries
-                flagged_data = self.process_flagged_timesheets(
-                    self.read_excel_file(self.hsbc_file),
-                    self.read_excel_file(self.mapping_file)
-                )
-                
                 # Write flagged entries worksheet
                 flagged_data.to_excel(
                     writer,
@@ -208,39 +219,41 @@ class TimesheetReconciliation:
                     )
                     worksheet.column_dimensions[chr(65 + idx)].width = max_length + 2
 
-            # Get the Excel data
-            excel_data = output.getvalue()
-            output.close()
-
-            logger.info("Report generated successfully")
-            return excel_data
+            return output.getvalue()
 
         except Exception as e:
             logger.error(f"Error generating report: {str(e)}")
             raise
 
     def run(self):
-        """Main execution method"""
+        """Run the reconciliation process"""
         try:
-            # Read all files
             logger.info("Reading input files...")
-            hsbc_df = self.read_excel_file(self.hsbc_file)
-            mapping_df = self.read_excel_file(self.mapping_file)
-            cg_df = self.read_excel_file(self.cg_file)
-
-            # Process data
+            # Read and combine multiple HSBC files
+            hsbc_df = self.read_multiple_files(self.hsbc_files)
+            
+            # Read mapping file
+            mapping_df = self.read_file(self.mapping_file)
+            
+            # Read and combine multiple CG files
+            cg_df = self.read_multiple_files(self.cg_files)
+            
             logger.info("Processing timesheet data...")
             processed_data = self.process_timesheet(hsbc_df, mapping_df, cg_df)
-
-            # Generate report
-            logger.info("Generating report...")
-            excel_data = self.generate_report(processed_data)
             
+            # Process flagged timesheet entries
+            flagged_data = self.process_flagged_timesheets(hsbc_df, mapping_df)
+            
+            logger.info("Generating report...")
+            excel_data = self.generate_report(processed_data, flagged_data)
+            
+            logger.info("Report generated successfully")
             logger.info("Reconciliation completed successfully")
+            
             return excel_data
-                    
+
         except Exception as e:
-            logger.error(f"Error in main execution: {str(e)}")
+            logger.error(f"Error in reconciliation process: {str(e)}")
             raise
 
 if __name__ == "__main__":
@@ -248,9 +261,9 @@ if __name__ == "__main__":
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     reconciliation = TimesheetReconciliation(
-        hsbc_file=HSBC_FILE,
+        hsbc_files=HSBC_FILE,
         mapping_file=MAPPING_FILE,
-        cg_file=CG_FILE,
+        cg_files=CG_FILE,
         output_dir=OUTPUT_DIR
     )
     reconciliation.run() 
