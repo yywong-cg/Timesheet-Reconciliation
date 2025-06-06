@@ -59,23 +59,35 @@ class TimesheetReconciliation:
     def process_timesheet(self, hsbc_df, mapping_df, cg_df):
         """Process timesheet data"""
         try:
-            # Step 1: Filter HSBC data by PROJECT_PRODUCTIVE_FLAG and TSSTATUS
+            # Step 1: Filter HSBC data by TSSTATUS
             hsbc_filtered = hsbc_df[
-                (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
-                (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted']))
+                hsbc_df['TSSTATUS'].isin(['Approved', 'Posted','Submitted'])
             ].copy()
             
             # Ensure UNITS_CONSUMED is numeric and fill NaN with 0
             hsbc_filtered['UNITS_CONSUMED'] = pd.to_numeric(hsbc_filtered['UNITS_CONSUMED'], errors='coerce').fillna(0)
             
-            # Step 2: Sum UNITS_CONSUMED for same RESOURCEID and TIMEPERIOD
-            hsbc_grouped = hsbc_filtered.groupby(['RESOURCEID', 'RESOURCE_NAME', 'TIMEPERIOD'])['UNITS_CONSUMED'].sum().reset_index()
+            # Set UNITS_CONSUMED to 0 for non-productive entries
+            hsbc_filtered.loc[hsbc_filtered['PROJECT_PRODUCTIVE_FLAG'] != 'Yes', 'UNITS_CONSUMED'] = 0
+            
+            # Step 2: Sum UNITS_CONSUMED for same RESOURCEID and TIMEPERIOD and get the latest PRICING_MODEL
+            hsbc_grouped = hsbc_filtered.groupby(['RESOURCEID', 'RESOURCE_NAME', 'TIMEPERIOD']).agg({
+                'UNITS_CONSUMED': 'sum',
+                'PRICING_MODEL': 'last'  # Get the latest PRICING_MODEL for each group
+            }).reset_index()
             
             # Step 3: Map CG Email from mapping file
+            # Handle different column names in mapping sheets
+            active_df = mapping_df['Offshore Active'].copy()
+            inactive_df = mapping_df['Offshore Inactive'].copy()
+            
+            # Rename the P&L Owner column in Inactive sheet to match Active sheet
+            inactive_df = inactive_df.rename(columns={'New P&L Owner': 'P&L Owner new'})
+            
             # Combine mapping data from both sheets
             mapping_combined = pd.concat([
-                mapping_df['Offshore Active'],
-                mapping_df['Offshore Inactive']
+                active_df,
+                inactive_df
             ], ignore_index=True)
             
             # Remove duplicates from mapping data
@@ -121,6 +133,7 @@ class TimesheetReconciliation:
                     'CG Email': row['CG Email Id'],
                     'P&L Owner': row['P&L Owner new'],
                     'Timesheet Period': pd.to_datetime(row['TIMEPERIOD']).strftime('%Y-%m-%d'),
+                    'Pricing Model': row['PRICING_MODEL'],
                     'HSBC Hrs': row['UNITS_CONSUMED'],
                     'CG Hrs': cg_hours,
                     'Discrepancy': row['UNITS_CONSUMED'] - cg_hours
@@ -138,16 +151,28 @@ class TimesheetReconciliation:
     def process_flagged_timesheets(self, hsbc_df, mapping_df):
         """Process flagged timesheet entries"""
         try:
-            # Step 1: Filter HSBC data for flagged entries
+            # Step 1: Filter HSBC data for flagged entries by TSSTATUS
             flagged_entries = hsbc_df[
-                (hsbc_df['PROJECT_PRODUCTIVE_FLAG'] == 'Yes') &
-                (hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted']))
+                hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted'])
             ].copy()
+            
+            # Ensure UNITS_CONSUMED is numeric and fill NaN with 0
+            flagged_entries['UNITS_CONSUMED'] = pd.to_numeric(flagged_entries['UNITS_CONSUMED'], errors='coerce').fillna(0)
+            
+            # Set UNITS_CONSUMED to 0 for non-productive entries
+            flagged_entries.loc[flagged_entries['PROJECT_PRODUCTIVE_FLAG'] != 'Yes', 'UNITS_CONSUMED'] = 0
 
-            # Step 2: Combine mapping data from both sheets
+            # Step 2: Handle different column names in mapping sheets
+            active_df = mapping_df['Offshore Active'].copy()
+            inactive_df = mapping_df['Offshore Inactive'].copy()
+            
+            # Rename the P&L Owner column in Inactive sheet to match Active sheet
+            inactive_df = inactive_df.rename(columns={'New P&L Owner': 'P&L Owner new'})
+            
+            # Combine mapping data from both sheets
             mapping_combined = pd.concat([
-                mapping_df['Offshore Active'],
-                mapping_df['Offshore Inactive']
+                active_df,
+                inactive_df
             ], ignore_index=True)
             
             # Remove duplicates from mapping data
@@ -169,6 +194,7 @@ class TimesheetReconciliation:
                 'CG Email': merged_data['CG Email Id'],
                 'P&L Owner': merged_data['P&L Owner new'],
                 'Timesheet Period': merged_data['TIMEPERIOD'],
+                'Pricing Model': merged_data['PRICING_MODEL'],
                 'HSBC Hrs': merged_data['UNITS_CONSUMED'],
                 'Status': merged_data['TSSTATUS']
             })
