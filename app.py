@@ -59,10 +59,8 @@ def save_uploaded_files(files, temp_dir):
     return saved_paths
 
 # Initialize session state for storing the generated report
-if 'report_data' not in st.session_state:
-    st.session_state.report_data = None
-if 'report_filename' not in st.session_state:
-    st.session_state.report_filename = None
+if 'report_path' not in st.session_state:
+    st.session_state.report_path = None
 
 # Process button
 if st.button("Generate Report", type="primary"):
@@ -92,17 +90,16 @@ if st.button("Generate Report", type="primary"):
                 )
                 
                 # Run the reconciliation
-                excel_data = reconciliation.run()
+                report_path = reconciliation.run()
 
-                if not excel_data:
+                if not report_path:
                     st.error("Failed to generate the report. Please check the input files and try again.")
                     st.stop()
 
-                # Store the report data and filename in session state
-                st.session_state.report_data = excel_data
-                st.session_state.report_filename = f"Timesheet_Reconciliation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                # Store the report path in session state
+                st.session_state.report_path = report_path
 
-                st.success("Report generated successfully! Click the 'Download Report' button below to download.")
+                st.success("Report generated successfully! Click the download button below to download.")
 
             except Exception as e:
                 st.error(f"Error generating report: {str(e)}")
@@ -111,13 +108,14 @@ if st.button("Generate Report", type="primary"):
         st.warning("Please upload all required files.")
 
 # Download button (only shown if report is generated)
-if st.session_state.report_data is not None:
-    st.download_button(
-        label="Download Report",
-        data=st.session_state.report_data,
-        file_name=st.session_state.report_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+if st.session_state.report_path is not None:
+    with open(st.session_state.report_path, 'rb') as f:
+        st.download_button(
+            label="Download Report",
+            data=f.read(),
+            file_name="HSBC_Timesheet_Reconciliation.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 # Add some helpful information
 st.markdown("---")
@@ -128,6 +126,12 @@ st.markdown("""
 3. Upload one or more CG Files (Excel or CSV format)
 4. Click 'Generate Report' to process the files
 5. Click 'Download Report' to save the report to your computer
+
+### Report Contents
+The generated Excel report contains three worksheets:
+1. **HSBC_CG TS Recon**: Main timesheet reconciliation data
+2. **HSBC Flagged TS Entry**: Entries with flags or issues that need attention
+3. **HSBC ExitDate Recon**: Resource exit dates and timesheet periods
 
 ### File Requirements
 - **HSBC Files**: Excel (.xlsx, .xls) or CSV files containing timesheet entries
