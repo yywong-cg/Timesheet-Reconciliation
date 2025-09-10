@@ -59,22 +59,27 @@ class TimesheetReconciliation:
     def process_timesheet(self, hsbc_df, mapping_df, cg_df):
         """Process timesheet data"""
         try:
-            # Get current date and calculate start month
+            # Get current date and calculate start month with Monday adjustment
             today = pd.Timestamp.today()
-            start_month = (today - pd.DateOffset(months=1)).strftime('%Y-%m')
+            one_month_back = today - pd.DateOffset(months=1)
+            
+            # Always go back to Monday of the previous week from the 1-month back date
+            start_date = one_month_back - pd.Timedelta(days=one_month_back.weekday() + 7)
+                
+            start_month = start_date.strftime('%Y-%m')
             current_month = today.strftime('%Y-%m')
             
-            # Convert CONSUMPTION_MONTH to YYYY-MM format for comparison
-            hsbc_df['CONSUMPTION_MONTH'] = pd.to_datetime(hsbc_df['CONSUMPTION_MONTH']).dt.strftime('%Y-%m')
+            # Convert TIMEPERIOD to datetime for comparison
+            hsbc_df['TIMEPERIOD'] = pd.to_datetime(hsbc_df['TIMEPERIOD'])
             
-            # Step 1: Filter HSBC data by TSSTATUS and consumption month
+            # Step 1: Filter HSBC data by TSSTATUS and timeperiod date
             hsbc_filtered = hsbc_df[
                 (hsbc_df['TSSTATUS'].isin(['Approved', 'Posted','Submitted'])) &
-                (hsbc_df['CONSUMPTION_MONTH'] >= start_month) &
-                (hsbc_df['CONSUMPTION_MONTH'] <= current_month)
+                (hsbc_df['TIMEPERIOD'] >= start_date) &
+                (hsbc_df['TIMEPERIOD'] <= today)
             ].copy()
             
-            logger.info(f"Filtering records between {start_month} and {current_month}")
+            logger.info(f"Filtering records between {start_date.strftime('%Y-%m-%d')} and {today.strftime('%Y-%m-%d')}")
             logger.info(f"Found {len(hsbc_filtered)} records in the date range")
             
             # Ensure UNITS_CONSUMED is numeric and fill NaN with 0
@@ -224,22 +229,27 @@ class TimesheetReconciliation:
     def process_flagged_timesheets(self, hsbc_df, mapping_df):
         """Process flagged timesheet entries"""
         try:
-            # Get current date and calculate start month
+            # Get current date and calculate start month with Monday adjustment
             today = pd.Timestamp.today()
-            start_month = (today - pd.DateOffset(months=1)).strftime('%Y-%m')
+            one_month_back = today - pd.DateOffset(months=1)
+            
+            # Always go back to Monday of the previous week from the 1-month back date
+            start_date = one_month_back - pd.Timedelta(days=one_month_back.weekday() + 7)
+                
+            start_month = start_date.strftime('%Y-%m')
             current_month = today.strftime('%Y-%m')
             
-            # Convert CONSUMPTION_MONTH to YYYY-MM format for comparison
-            hsbc_df['CONSUMPTION_MONTH'] = pd.to_datetime(hsbc_df['CONSUMPTION_MONTH']).dt.strftime('%Y-%m')
+            # Convert TIMEPERIOD to datetime for comparison
+            hsbc_df['TIMEPERIOD'] = pd.to_datetime(hsbc_df['TIMEPERIOD'])
             
-            # Step 1: Filter HSBC data for flagged entries by TSSTATUS and consumption month
+            # Step 1: Filter HSBC data for flagged entries by TSSTATUS and timeperiod date
             flagged_entries = hsbc_df[
                 (hsbc_df['TSSTATUS'].isin(['Open', 'Returned', 'Submitted'])) &
-                (hsbc_df['CONSUMPTION_MONTH'] >= start_month) &
-                (hsbc_df['CONSUMPTION_MONTH'] <= current_month)
+                (hsbc_df['TIMEPERIOD'] >= start_date) &
+                (hsbc_df['TIMEPERIOD'] <= today)
             ].copy()
             
-            logger.info(f"Filtering flagged entries between {start_month} and {current_month}")
+            logger.info(f"Filtering flagged entries between {start_date.strftime('%Y-%m-%d')} and {today.strftime('%Y-%m-%d')}")
             logger.info(f"Found {len(flagged_entries)} flagged entries in the date range")
             
             # Ensure UNITS_CONSUMED is numeric and fill NaN with 0
@@ -302,7 +312,14 @@ class TimesheetReconciliation:
             # Log the number of duplicates removed
             logger.info(f"Removed {len(merged_data) - len(result_df)} duplicate entries from flagged timesheets")
 
-            return result_df
+            # Separate into two DataFrames based on status
+            open_entries = result_df[result_df['Status'] == 'Open'].copy()
+            other_entries = result_df[result_df['Status'] != 'Open'].copy()
+
+            logger.info(f"Open entries: {len(open_entries)}")
+            logger.info(f"Other flagged entries: {len(other_entries)}")
+
+            return open_entries, other_entries
 
         except Exception as e:
             logger.error(f"Error processing flagged timesheet entries: {str(e)}")
@@ -350,13 +367,33 @@ class TimesheetReconciliation:
             
             exit_dates['Exit Date'] = exit_dates[exit_date_col].apply(convert_excel_date)
             
-            # Calculate 2-month window
+            # Calculate 1-month window with Friday adjustment
             today = pd.Timestamp.today()
-            start_month = (today - pd.DateOffset(months=2)).replace(day=1)
+            one_month_back = today - pd.DateOffset(months=1)
             
-            # Filter for exits within the last 2 months
+            # Always go back to Monday of the previous week from the 1-month back date
+            start_date = one_month_back - pd.Timedelta(days=one_month_back.weekday() + 7)
+            
+            # Step 3: Get onboard dates from HSBC data within the date range
+            onboard_dates = hsbc_df[['RESOURCEID', 'CONTRACT_STARTDATE']].copy()
+            onboard_dates['RESOURCEID'] = onboard_dates['RESOURCEID'].astype(str)
+            
+            # Convert CONTRACT_STARTDATE to datetime
+            onboard_dates['Onboard Date'] = pd.to_datetime(onboard_dates['CONTRACT_STARTDATE'], errors='coerce')
+            
+            # Filter onboard dates to only include those within the current month range
+            onboard_dates = onboard_dates.dropna(subset=['Onboard Date'])
+            onboard_dates = onboard_dates[
+                (onboard_dates['Onboard Date'] >= start_date) & 
+                (onboard_dates['Onboard Date'] <= today)
+            ]
+            
+            # Remove duplicates and keep the latest onboard date for each resource
+            onboard_dates = onboard_dates.groupby('RESOURCEID')['Onboard Date'].max().reset_index()
+            
+            # Filter for exits within the last 1 month (with Friday adjustment)
             exit_dates = exit_dates[
-                (exit_dates['Exit Date'] >= start_month) & 
+                (exit_dates['Exit Date'] >= start_date) & 
                 (exit_dates['Exit Date'] <= today)
             ].copy()
             
@@ -392,9 +429,18 @@ class TimesheetReconciliation:
                 how='left'
             )
             
+            # Step 6: Add onboard dates
+            result_df = pd.merge(
+                result_df,
+                onboard_dates[['RESOURCEID', 'Onboard Date']],
+                left_on='HSBC Staff ID',
+                right_on='RESOURCEID',
+                how='left'
+            )
+            
             # Fill 0 for any missing values in timesheet period columns
             period_columns = [col for col in result_df.columns if col not in 
-                            ['Name', 'HSBC Staff ID', 'CG Email', 'P&L Owner', 'PS ID', 'Exit Date', 'Pricing Model']]
+                            ['Name', 'HSBC Staff ID', 'CG Email', 'P&L Owner', 'PS ID', 'Exit Date', 'Onboard Date', 'Pricing Model']]
             result_df[period_columns] = result_df[period_columns].fillna(0)
             
             # Create final DataFrame with desired columns
@@ -404,6 +450,9 @@ class TimesheetReconciliation:
                 'CG Email': result_df['CG Email'],
                 'P&L Owner': result_df['P&L Owner'],
                 'Pricing Model': result_df['Pricing Model'],
+                'Onboard Date': result_df['Onboard Date'].apply(
+                    lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''
+                ),
                 'Exit Date': result_df['Exit Date'].apply(
                     lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''
                 )
@@ -419,10 +468,31 @@ class TimesheetReconciliation:
             # Sort by Name
             final_df = final_df.sort_values('Name')
 
-            # Remove rows where all period columns are non-zero and Exit Date is empty
-            period_columns = [col for col in final_df.columns if col not in ['Name', 'HSBC Staff ID', 'CG Email', 'P&L Owner', 'Pricing Model', 'Exit Date']]
-            mask = ~((final_df[period_columns] != 0).all(axis=1) & (final_df['Exit Date'] == ''))
+            # Debug: Log the counts before filtering
+            logger.info(f"Total rows before date filtering: {len(final_df)}")
+            has_onboard_debug = (final_df['Onboard Date'] != '') & (final_df['Onboard Date'].notna())
+            has_exit_debug = (final_df['Exit Date'] != '') & (final_df['Exit Date'].notna())
+            logger.info(f"Rows with onboard date: {has_onboard_debug.sum()}")
+            logger.info(f"Rows with exit date: {has_exit_debug.sum()}")
+            logger.info(f"Rows with both dates: {(has_onboard_debug & has_exit_debug).sum()}")
+            logger.info(f"Rows with no dates: {((~has_onboard_debug) & (~has_exit_debug)).sum()}")
+            
+            # Remove rows where resource has no onboard date AND no exit date
+            # Keep rows that have either onboard date OR exit date (or both)
+            # Handle both empty strings and NaN values
+            has_onboard_date = (final_df['Onboard Date'] != '') & (final_df['Onboard Date'].notna())
+            has_exit_date = (final_df['Exit Date'] != '') & (final_df['Exit Date'].notna())
+            mask = has_onboard_date | has_exit_date
             final_df = final_df[mask]
+            
+            logger.info(f"Rows after date filtering: {len(final_df)}")
+            
+            # Also remove rows where all period columns are non-zero and Exit Date is empty (legacy filter)
+            period_columns = [col for col in final_df.columns if col not in ['Name', 'HSBC Staff ID', 'CG Email', 'P&L Owner', 'Pricing Model', 'Onboard Date', 'Exit Date']]
+            mask2 = ~((final_df[period_columns] != 0).all(axis=1) & (final_df['Exit Date'] == ''))
+            final_df = final_df[mask2]
+            
+            logger.info(f"Final rows after all filtering: {len(final_df)}")
 
             return final_df
 
@@ -430,7 +500,7 @@ class TimesheetReconciliation:
             logger.error(f"Error processing exit date reconciliation: {str(e)}")
             raise
 
-    def generate_report(self, processed_data, flagged_data, exit_date_data, output_dir, combined_hsbc_df=None, sub_con_data=None):
+    def generate_report(self, processed_data, open_flagged_data, other_flagged_data, exit_date_data, output_dir, combined_hsbc_df=None, sub_con_data=None):
         """Generate reconciliation report with all worksheets and the combined HSBC data"""
         try:
             # Create file path
@@ -460,27 +530,51 @@ class TimesheetReconciliation:
                         for cell in worksheet[f'{column_letter}2:{column_letter}{len(processed_data)+1}']:
                             cell[0].number_format = 'yyyy-mm-dd'
 
-                # Write flagged entries worksheet
-                flagged_data.to_excel(
-                    writer,
-                    sheet_name='HSBC Flagged TS Entry',
-                    index=False
-                )
-                
-                # Auto-adjust column widths and format dates for flagged entries worksheet
-                worksheet = writer.sheets['HSBC Flagged TS Entry']
-                for idx, col in enumerate(flagged_data.columns):
-                    max_length = max(
-                        flagged_data[col].astype(str).apply(len).max(),
-                        len(col)
+                # Write Open flagged entries worksheet
+                if not open_flagged_data.empty:
+                    open_flagged_data.to_excel(
+                        writer,
+                        sheet_name='HSBC Open TS Entries',
+                        index=False
                     )
-                    column_letter = chr(65 + idx)
-                    worksheet.column_dimensions[column_letter].width = max_length + 2
                     
-                    # Format date columns
-                    if col == 'Timesheet Period':
-                        for cell in worksheet[f'{column_letter}2:{column_letter}{len(flagged_data)+1}']:
-                            cell[0].number_format = 'yyyy-mm-dd'
+                    # Auto-adjust column widths and format dates for Open flagged entries worksheet
+                    worksheet = writer.sheets['HSBC Open TS Entries']
+                    for idx, col in enumerate(open_flagged_data.columns):
+                        max_length = max(
+                            open_flagged_data[col].astype(str).apply(len).max(),
+                            len(col)
+                        )
+                        column_letter = chr(65 + idx)
+                        worksheet.column_dimensions[column_letter].width = max_length + 2
+                        
+                        # Format date columns
+                        if col == 'Timesheet Period':
+                            for cell in worksheet[f'{column_letter}2:{column_letter}{len(open_flagged_data)+1}']:
+                                cell[0].number_format = 'yyyy-mm-dd'
+
+                # Write Other flagged entries worksheet
+                if not other_flagged_data.empty:
+                    other_flagged_data.to_excel(
+                        writer,
+                        sheet_name='HSBC Other Flagged TS',
+                        index=False
+                    )
+                    
+                    # Auto-adjust column widths and format dates for Other flagged entries worksheet
+                    worksheet = writer.sheets['HSBC Other Flagged TS']
+                    for idx, col in enumerate(other_flagged_data.columns):
+                        max_length = max(
+                            other_flagged_data[col].astype(str).apply(len).max(),
+                            len(col)
+                        )
+                        column_letter = chr(65 + idx)
+                        worksheet.column_dimensions[column_letter].width = max_length + 2
+                        
+                        # Format date columns
+                        if col == 'Timesheet Period':
+                            for cell in worksheet[f'{column_letter}2:{column_letter}{len(other_flagged_data)+1}']:
+                                cell[0].number_format = 'yyyy-mm-dd'
 
                 # Write exit date reconciliation worksheet
                 exit_date_data.to_excel(
@@ -499,8 +593,8 @@ class TimesheetReconciliation:
                     column_letter = chr(65 + idx)
                     worksheet.column_dimensions[column_letter].width = max_length + 2
                     
-                    # Format only Exit Date column
-                    if col == 'Exit Date':
+                    # Format date columns
+                    if col in ['Onboard Date', 'Exit Date']:
                         for cell in worksheet[f'{column_letter}2:{column_letter}{len(exit_date_data)+1}']:
                             cell[0].number_format = 'yyyy-mm-dd'
 
@@ -557,13 +651,13 @@ class TimesheetReconciliation:
             processed_data, unfiltered_data, sub_con_data = self.process_timesheet(combined_hsbc_df, mapping_df, combined_cg_df)
             
             # Process flagged entries
-            flagged_data = self.process_flagged_timesheets(combined_hsbc_df, mapping_df)
+            open_flagged_data, other_flagged_data = self.process_flagged_timesheets(combined_hsbc_df, mapping_df)
             
             # Process exit date reconciliation using unfiltered data
             exit_date_data = self.process_exit_date_recon(combined_hsbc_df, mapping_df, unfiltered_data)
             
             # Generate combined Excel report with all worksheets and the combined HSBC data
-            report_path = self.generate_report(processed_data, flagged_data, exit_date_data, output_dir, combined_hsbc_df=combined_hsbc_df, sub_con_data=sub_con_data)
+            report_path = self.generate_report(processed_data, open_flagged_data, other_flagged_data, exit_date_data, output_dir, combined_hsbc_df=combined_hsbc_df, sub_con_data=sub_con_data)
             
             return report_path
             
